@@ -1,8 +1,15 @@
 (ns talent.operation
-  "OperationActor — one HR operation = one supervised actor run, expressed
-  as a langgraph-clj StateGraph. The HR-LLM is sealed into a single node
-  (:advise); its proposal is ALWAYS routed through the PolicyGovernor
-  (:govern) before anything commits to the SSoT.
+  "OperationActor — one HR operation = one supervised actor run, expressed as
+  a langgraph-clj StateGraph. The advisor (HR-LLM) is sealed into a single
+  node (:advise); its proposal is ALWAYS routed through the PolicyGovernor
+  (:govern) and the rollout phase gate (:decide) before anything commits to
+  the SSoT.
+
+  Everything the actor depends on is injected, so each is a swap, not a
+  rewrite:
+    - the Store     (MemStore | DatomicStore | kotoba-server) — `store` arg
+    - the Advisor   (mock | real LLM)                          — :advisor opt
+    - the Phase     (0→3 rollout)                              — :phase in ctx
 
   One graph run = one HR operation (intake → advise → govern → decide →
   commit | hold | approval). No unbounded inner loop — each operation is
@@ -10,13 +17,13 @@
 
   Human-in-the-loop = real approval workflow:
   `interrupt-before #{:request-approval}` pauses the actor and hands the
-  decision to the ApprovalActor (an HRBP / manager), exactly like
-  robotaxi's teleop handoff. The approver resumes with
+  decision to the ApprovalActor (an HRBP / manager). The approver resumes with
   `{:approval {:status :approved}}` (or :rejected)."
   (:require [langgraph.graph :as g]
             [langgraph.checkpoint :as cp]
             [talent.hrllm :as hrllm]
             [talent.policy :as policy]
+            [talent.phase :as phase]
             [talent.store :as store]))
 
 (defn- commit-fact [request context proposal]
@@ -28,73 +35,80 @@
    :basis      (:cites proposal)
    :summary    (:summary proposal)})
 
+(defn- commit-record [request context proposal]
+  {:effect  (:effect proposal)
+   :value   (:value proposal)
+   :path    [(:subject request)]
+   :payload {:summary (:summary proposal) :by (:actor-id context)}})
+
 (defn build
-  "Compiles an OperationActor graph bound to a `db` (the SSoT atom).
-  opts: {:checkpointer cp}  (default: in-mem checkpointer)."
-  [db & [{:keys [checkpointer]
-          :or   {checkpointer (cp/mem-checkpointer)}}]]
+  "Compiles an OperationActor graph bound to `store` (any `talent.store/Store`).
+  opts:
+    :advisor      — a `talent.hrllm/Advisor` (default: mock-advisor)
+    :checkpointer — langgraph checkpointer (default: in-mem)"
+  [store & [{:keys [advisor checkpointer]
+             :or   {advisor      (hrllm/mock-advisor)
+                    checkpointer (cp/mem-checkpointer)}}]]
   (-> (g/state-graph
        {:channels
         {:request     {:default nil}
-         :context     {:default nil}   ; injected RBAC/purpose/consent — LLM has none
+         :context     {:default nil}   ; injected RBAC/purpose/consent/phase
          :proposal    {:default nil}
          :verdict     {:default nil}
          :disposition {:default nil}   ; :commit | :hold | :escalate
-         :record      {:default nil}   ; what a commit writes to the SSoT
-         :approval    {:default nil}   ; human approver resolution
+         :record      {:default nil}
+         :approval    {:default nil}
          :audit       {:reducer into :default []}}})
 
-      ;; 1. Intake — request + injected context arrive via input; passthrough.
       (g/add-node :intake (fn [s] s))
 
-      ;; 2. HR-LLM inference (the contained intelligence node) — proposal only.
+      ;; HR-LLM inference (the contained intelligence node) — proposal only.
       (g/add-node :advise
         (fn [{:keys [request]}]
-          (let [p (hrllm/infer db request)]
-            {:proposal p
-             :audit    [(hrllm/trace request p)]})))
+          (let [p (hrllm/-advise advisor store request)]
+            {:proposal p :audit [(hrllm/trace request p)]})))
 
-      ;; 3. PolicyGovernor — independent censor (separate system than the LLM).
+      ;; PolicyGovernor — independent censor (separate system than the LLM).
       (g/add-node :govern
         (fn [{:keys [request context proposal]}]
-          {:verdict (policy/check request context proposal db store/employee)}))
+          {:verdict (policy/check request context proposal store)}))
 
-      ;; 4. Decide: auto-commit (clean), escalate to human (soft), or HOLD
-      ;;    (hard violation — no human can override).
+      ;; Decide: policy disposition, then the rollout-phase gate (which can
+      ;; only add caution). HARD policy violations → HOLD (no override).
       (g/add-node :decide
         (fn [{:keys [request context proposal verdict]}]
-          (cond
-            (:hard? verdict)
-            {:disposition :hold
-             :audit [(policy/hold-fact request context verdict)]}
+          (let [base (phase/verdict->disposition verdict)
+                ph   (:phase context phase/default-phase)
+                {:keys [disposition reason]} (phase/gate ph request base)]
+            (case disposition
+              :hold
+              {:disposition :hold
+               :audit [(cond-> (policy/hold-fact request context verdict)
+                         reason (assoc :phase-reason reason :phase ph))]}
 
-            (:escalate? verdict)
-            {:disposition :escalate
-             :audit [{:t :approval-requested
-                      :op (:op request) :subject (:subject request)
-                      :reason (cond (:high-stakes? verdict) :high-stakes
-                                    :else :low-confidence)
-                      :confidence (:confidence verdict)}]}
+              :escalate
+              {:disposition :escalate
+               :audit [{:t :approval-requested
+                        :op (:op request) :subject (:subject request)
+                        :reason (or reason
+                                    (cond (:high-stakes? verdict) :high-stakes
+                                          :else :low-confidence))
+                        :phase ph
+                        :confidence (:confidence verdict)}]}
 
-            :else
-            {:disposition :commit
-             :record {:effect (:effect proposal)
-                      :value  (:value proposal)
-                      :path   [(:subject request)]
-                      :payload {:summary (:summary proposal)
-                                :by (:actor-id context)}}})))
+              :commit
+              {:disposition :commit
+               :record (commit-record request context proposal)}))))
 
-      ;; 5a. Approval handoff — paused by interrupt-before; ApprovalActor
-      ;;     (human) resumes with :approval. Then route commit/hold.
+      ;; Approval handoff — paused by interrupt-before; ApprovalActor (human)
+      ;; resumes with :approval. Then route commit/hold.
       (g/add-node :request-approval
         (fn [{:keys [request context proposal approval verdict]}]
           (if (= :approved (:status approval))
             {:disposition :commit
-             :record {:effect (:effect proposal)
-                      :value  (:value proposal)
-                      :path   [(:subject request)]
-                      :payload {:summary (:summary proposal)
-                                :approved-by (:by approval)}}
+             :record (assoc (commit-record request context proposal)
+                            :payload {:summary (:summary proposal)
+                                      :approved-by (:by approval)})
              :audit [{:t :approval-granted :op (:op request)
                       :subject (:subject request) :by (:by approval)}]}
             {:disposition :hold
@@ -103,21 +117,19 @@
                                                      [{:rule :approver-rejected}]))
                             {:t :approval-rejected})]})))
 
-      ;; 5b. Commit — the ONLY node that writes the SSoT + audit ledger.
+      ;; Commit — the ONLY node that writes the SSoT + audit ledger.
       (g/add-node :commit
         (fn [{:keys [request context proposal record]}]
-          (store/commit-record! db record)
+          (store/commit-record! store record)
           (let [f (commit-fact request context proposal)]
-            (store/append-ledger! db f)
+            (store/append-ledger! store f)
             {:audit [f]})))
 
-      ;; 5c. Hold — write the rejection to the ledger; no SSoT mutation.
+      ;; Hold — write the rejection to the ledger; no SSoT mutation.
       (g/add-node :hold
         (fn [{:keys [audit]}]
-          ;; the hold-fact was produced upstream (:decide / :request-approval)
-          ;; and is already on :audit; mirror it into the immutable ledger.
           (when-let [hf (last (filter #(#{:policy-hold :approval-rejected} (:t %)) audit))]
-            (store/append-ledger! db (assoc hf :disposition :hold)))
+            (store/append-ledger! store (assoc hf :disposition :hold)))
           {}))
 
       (g/set-entry-point :intake)
@@ -125,7 +137,6 @@
       (g/add-edge :advise :govern)
       (g/add-edge :govern :decide)
 
-      ;; Route on disposition.
       (g/add-conditional-edges :decide
         (fn [{:keys [disposition]}]
           (case disposition
@@ -133,7 +144,6 @@
             :escalate :request-approval
             :hold)))
 
-      ;; After human approval, route commit/hold.
       (g/add-conditional-edges :request-approval
         (fn [{:keys [disposition]}]
           (if (= :commit disposition) :commit :hold)))

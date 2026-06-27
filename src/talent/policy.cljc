@@ -18,7 +18,8 @@
     4. Minimal disclosure  — does an export exceed the purpose's allowed cols?
     5. Confidence floor    — LLM confidence below threshold → escalate.
     6. High-stakes gate    — grade-change/termination/... → escalate."
-  (:require [clojure.set :as set]))
+  (:require [clojure.set :as set]
+            [talent.store :as store]))
 
 ;; ───────────────────────── policy tables ─────────────────────────
 
@@ -50,18 +51,18 @@
 
 (defn- subject-allowed?
   "A manager may only act on their own direct reports; HRBP on anyone."
-  [{:keys [actor-role actor-id]} subject db employee-fn]
+  [{:keys [actor-role actor-id]} subject st]
   (case actor-role
     :hrbp true
-    :manager (= actor-id (:manager (employee-fn db subject)))
+    :manager (= actor-id (:manager (store/employee st subject)))
     false))
 
-(defn- rbac-violations [{:keys [op]} {:keys [actor-role] :as ctx} subject db employee-fn]
+(defn- rbac-violations [{:keys [op]} {:keys [actor-role] :as ctx} subject st]
   (cond-> []
     (not (contains? (get permissions actor-role #{}) op))
     (conj {:rule :rbac :detail (str actor-role " は " op " の権限を持たない")})
     (and (contains? (get permissions actor-role #{}) op)
-         (not (subject-allowed? ctx subject db employee-fn)))
+         (not (subject-allowed? ctx subject st)))
     (conj {:rule :rbac-subject :detail (str actor-role " は対象 " subject " に権限が及ばない")})))
 
 (defn- purpose-violations [{:keys [purpose consent?]}]
@@ -98,10 +99,10 @@
                     disclosure). Forces HOLD; a human cannot override.
    - :escalate?   — soft: low confidence OR high-stakes. A human decides.
    - :ok?         — clean AND not escalating: safe to auto-commit."
-  [request context proposal db employee-fn]
+  [request context proposal st]
   (let [subject (:subject request)
         hard    (into []
-                      (concat (rbac-violations request context subject db employee-fn)
+                      (concat (rbac-violations request context subject st)
                               (purpose-violations context)
                               (fairness-violations request proposal)
                               (disclosure-violations request context proposal)))

@@ -59,7 +59,7 @@
       (is (= :hold (get-in res [:state :disposition])))
       (is (some #{:fairness} (-> (store/ledger db) first :basis))
           "fairness is the basis for the hold")
-      (is (nil? (get-in @db [:evaluations "e-001"])) "no evaluation written"))))
+      (is (nil? (store/evaluation-of db "e-001")) "no evaluation written"))))
 
 (deftest over-disclosure-is-held
   (testing "a report pulling protected columns beyond the purpose → HOLD"
@@ -87,7 +87,7 @@
           r2 (g/run* actor {:approval {:status :rejected :by "e-100"}}
                      {:thread-id "t7" :resume? true})]
       (is (= :hold (get-in r2 [:state :disposition])))
-      (is (nil? (get-in @db [:insights "e-002"])) "nothing committed on reject"))))
+      (is (nil? (store/insight-of db "e-002")) "nothing committed on reject"))))
 
 (deftest every-decision-leaves-one-ledger-fact
   (testing "write-only-through-ledger: N operations → N ledger facts"

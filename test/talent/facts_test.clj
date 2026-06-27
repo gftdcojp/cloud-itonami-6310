@@ -44,14 +44,43 @@
   (is (= [] (facts/read-people "/no/such/people.edn")))
   (is (nil? (facts/load-employees "/no/such/people.edn"))))
 
+(def goals-fixture
+  (str "{:goal/person \"u-1\" :goal/id \"g-9\"  :goal/title \"受注10\" "
+       ":goal/target 10 :goal/actual 11 :goal/period \"2026H1\"}\n"
+       "{:goal/person \"u-1\" :goal/id \"g-10\" :goal/title \"資料整備\" "
+       ":goal/target 1 :goal/actual 0 :goal/period \"2026H1\"}\n"))
+
+(def surveys-fixture
+  "{:survey/person \"u-1\" :survey/engagement 3.3 :survey/enps 10 :survey/free \"ok\"}\n")
+
+(deftest loads-goals-and-surveys
+  (let [g (facts/load-goals (write-tmp! goals-fixture))
+        s (facts/load-surveys (write-tmp! surveys-fixture))]
+    (is (= 2 (count (get g "u-1"))) "goals grouped by employee")
+    (is (= 11 (:actual (first (get g "u-1")))))
+    (is (= 10 (:enps (get s "u-1"))))))
+
+(deftest goals-surveys-fall-back-when-unavailable
+  (is (nil? (facts/load-goals "/no/such/goals.edn")))
+  (is (nil? (facts/load-surveys "/no/such/surveys.edn"))))
+
+(deftest hydrate-fills-store-from-all-facts
+  (let [db (store/seed-db)]
+    (facts/hydrate! db {:people-path  (write-tmp! fixture)
+                        :goals-path   (write-tmp! goals-fixture)
+                        :surveys-path (write-tmp! surveys-fixture)})
+    (is (= #{"u-1" "u-3"} (set (map :id (store/all-employees db)))) "directory from facts")
+    (is (= 2 (count (store/goals-of db "u-1"))) "goals from facts")
+    (is (= 10 (:enps (store/survey-of db "u-1"))) "survey from facts")))
+
 (deftest store-hydration-is-opt-in-and-safe
   (testing "with-employees replaces the directory; nil/empty is a no-op"
     (let [db (store/seed-db)
-          demo-ids (set (keys (:employees @db)))]
+          demo-ids (set (map :id (store/all-employees db)))]
       (store/with-employees db nil)
-      (is (= demo-ids (set (keys (:employees @db)))) "nil → demo seed kept")
+      (is (= demo-ids (set (map :id (store/all-employees db)))) "nil → demo seed kept")
       (store/with-employees db (facts/load-employees (write-tmp! fixture)))
-      (is (= #{"u-1" "u-3"} (set (keys (:employees @db)))) "facts hydrate the SSoT")
+      (is (= #{"u-1" "u-3"} (set (map :id (store/all-employees db)))) "facts hydrate the SSoT")
       ;; goals/ledger untouched by employee hydration
-      (is (contains? (:goals @db) "e-001"))
-      (is (= [] (:ledger @db))))))
+      (is (seq (store/goals-of db "e-001")))
+      (is (= [] (store/ledger db))))))

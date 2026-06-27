@@ -18,7 +18,9 @@
      :effect     kw             ; how a commit would mutate the SSoT
      :stake      kw|nil         ; :grade-change/:termination/... if high-stakes
      :confidence 0..1}"
-  (:require [clojure.string :as str]
+  (:require [clojure.edn :as edn]
+            [clojure.string :as str]
+            [langchain.model :as model]
             [talent.store :as store]))
 
 (defn- pct [{:keys [target actual]}]
@@ -110,6 +112,63 @@
     :report/export    (propose-columns db request)
     {:summary "未対応の操作" :rationale (str op) :cites []
      :effect :noop :stake nil :confidence 0.0}))
+
+;; ───────────────────────── Advisor protocol ─────────────────────────
+;; The advisor is injected into the OperationActor, so the contained
+;; intelligence node is a swap: a deterministic mock for dev/tests, or a real
+;; LLM in production. Either way its output is a PROPOSAL the PolicyGovernor
+;; still censors — the single invariant never depends on which advisor ran.
+
+(defprotocol Advisor
+  (-advise [advisor store request] "store + request → proposal map"))
+
+(defn mock-advisor
+  "The deterministic advisor (the `infer` logic above). Default everywhere."
+  [] (reify Advisor (-advise [_ st req] (infer st req))))
+
+(def ^:private system-prompt
+  (str "あなたは人事の助言者です。与えられた事実のみに基づき、提案を1つだけ "
+       "EDN マップで返します。説明や前置きは一切書かず、EDN だけを出力します。\n"
+       "キー: :summary(人向けドラフト) :rationale(根拠/必ず事実から) "
+       ":cites(使った事実キーのベクタ) :effect(:set-goal-eval|:store-insight|:upsert-employee) "
+       ":stake(:grade-change 等/無ければ nil) :confidence(0..1)。\n"
+       "重要: 保護属性(:age :gender :nationality :creed :health :marital :pregnancy)を "
+       "根拠(:cites/:rationale)にしてはいけません。"))
+
+(defn- facts-for [st {:keys [op subject]}]
+  (case op
+    :evaluation/draft {:employee (store/employee st subject) :goals (store/goals-of st subject)}
+    :survey/analyze   {:employee (store/employee st subject) :survey (store/survey-of st subject)}
+    {:employee (store/employee st subject)}))
+
+(defn- parse-proposal
+  "Parse the model's EDN proposal defensively. Any parse/shape failure yields
+  a safe low-confidence noop so the PolicyGovernor escalates/holds — an LLM
+  hiccup can never auto-commit."
+  [content]
+  (let [p (try (edn/read-string (str/trim (str content))) (catch Exception _ nil))]
+    (if (map? p)
+      (-> p
+          (update :cites #(vec (or % [])))
+          (update :confidence #(if (number? %) (double %) 0.0))
+          (update :effect #(or % :noop)))
+      {:summary "LLM応答を解釈できませんでした" :rationale (str content)
+       :cites [] :effect :noop :stake nil :confidence 0.0})))
+
+(defn llm-advisor
+  "An advisor backed by a `langchain.model/ChatModel` (real inference). Pass
+  `model/anthropic-model`, an OpenAI-compatible model (Ollama/vLLM/kotoba), or
+  `model/mock-model` for offline tests. `gen-opts` is forwarded to -generate."
+  ([chat-model] (llm-advisor chat-model {}))
+  ([chat-model gen-opts]
+   (reify Advisor
+     (-advise [_ st req]
+       (let [msgs [{:role :system :content system-prompt}
+                   {:role :user :content (str "操作: " (:op req)
+                                              "\n対象: " (:subject req)
+                                              "\n事実: " (pr-str (facts-for st req)))}]
+             resp (model/-generate chat-model msgs gen-opts)]
+         (parse-proposal (:content resp)))))))
 
 (defn trace
   "Decision-grounded audit record — the LLM's interpretable rationale is a

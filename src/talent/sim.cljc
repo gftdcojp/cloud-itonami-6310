@@ -13,6 +13,7 @@
   (:require [langgraph.graph :as g]
             [talent.store :as store]
             [talent.operation :as op]
+            [talent.phase :as phase]
             [talent.report :as report]))
 
 (defn- line [& xs] (println (apply str xs)))
@@ -74,4 +75,30 @@
     (line "\n── 監査台帳 (append-only; SaaS では得られない不変の証跡) ──")
     (doseq [f (store/ledger db)]
       (line "  " (store/ledger-line f)))
+
+    ;; ── Phase 0→3 段階導入: 同じ「正当な upsert」が phase で変わる ──
+    (line "\n── 段階導入 Phase 0→3 (同一の正当な upsert を phase 別に) ──")
+    (doseq [ph [0 1 3]]
+      (let [s2 (store/seed-db)
+            a2 (op/build s2)
+            r  (g/run* a2 {:request {:op :employee/upsert :subject "e-002"
+                                     :patch {:id "e-002" :dept "推進"}}
+                           :context (assoc hrbp :phase ph)}
+                       {:thread-id (str "phase-" ph)})]
+        (line "  phase " ph " (" (:label (phase/phases ph)) "): "
+              (if (= :interrupted (:status r))
+                "⏸ 人間承認へ"
+                (str (get-in r [:state :disposition])
+                     (when-let [pr (-> (store/ledger s2) last :phase-reason)]
+                       (str " (" pr ")")))))))
+
+    ;; ── SSoT バックエンド差し替え (in-mem → Datomic) は1行 ──
+    (line "\n── バックエンド差し替え: DatomicStore でも同一契約 ──")
+    (let [ds    (store/datomic-seed-db)
+          dactor (op/build ds)]
+      (g/run* dactor {:request {:op :employee/upsert :subject "e-002"
+                                :patch {:id "e-002" :dept "DatomicでもOK"}}
+                      :context hrbp} {:thread-id "datomic-op1"})
+      (line "  DatomicStore: e-002.dept = " (:dept (store/employee ds "e-002"))
+            " / ledger = " (mapv :disposition (store/ledger ds))))
     (line "\ndone.")))

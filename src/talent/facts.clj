@@ -14,11 +14,13 @@
   portable `.cljc`."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [talent.store :as store]))
 
-(def default-people-path
-  "Relative to the project root (cwd when run via clojure -M)."
-  "../m365-archive/facts/people.edn")
+(def facts-dir "../m365-archive/facts")
+(def default-people-path  (str facts-dir "/people.edn"))
+(def default-goals-path   (str facts-dir "/goals.edn"))
+(def default-surveys-path (str facts-dir "/surveys.edn"))
 
 (defn annex-pointer?
   "True when `content` is an unmaterialized git-annex pointer rather than
@@ -73,3 +75,51 @@
   ([path]
    (let [emps (people->employees (read-people path))]
      (when (seq emps) emps))))
+
+;; ───────────────────────── goals (MBO/OKR) ─────────────────────────
+
+(defn ->goal [g]
+  {:id (:goal/id g) :title (:goal/title g) :target (:goal/target g)
+   :actual (:goal/actual g) :period (:goal/period g)})
+
+(defn load-goals
+  "Goals grouped by employee id ({id [goal ...]}), or nil when unavailable.
+  Facts shape: line-delimited `{:goal/person <emp-id> :goal/id .. :goal/title
+  .. :goal/target .. :goal/actual .. :goal/period ..}`."
+  ([] (load-goals default-goals-path))
+  ([path]
+   (let [by-emp (->> (read-people path)              ; same line-delimited reader
+                     (filter :goal/person)
+                     (group-by :goal/person))
+         m (into {} (for [[eid gs] by-emp] [eid (mapv ->goal gs)]))]
+     (when (seq m) m))))
+
+;; ───────────────────────── engagement surveys ─────────────────────────
+
+(defn ->survey [s]
+  {:engagement (:survey/engagement s) :enps (:survey/enps s) :free (:survey/free s)})
+
+(defn load-surveys
+  "Surveys keyed by employee id ({id survey}), or nil when unavailable.
+  Facts shape: `{:survey/person <emp-id> :survey/engagement .. :survey/enps ..
+  :survey/free ..}` (latest wins on duplicate)."
+  ([] (load-surveys default-surveys-path))
+  ([path]
+   (let [m (into {} (for [s (filter :survey/person (read-people path))]
+                      [(:survey/person s) (->survey s)]))]
+     (when (seq m) m))))
+
+(defn hydrate!
+  "Replace/seed a Store's directory + goals + surveys from m365-archive facts,
+  each falling back to whatever the store already holds when its facts file is
+  absent or an annex pointer. Returns the store. The production seam: build a
+  demo or Datomic store, then `(facts/hydrate! store)`."
+  ([st] (hydrate! st {}))
+  ([st {:keys [people-path goals-path surveys-path]
+        :or   {people-path default-people-path
+               goals-path default-goals-path
+               surveys-path default-surveys-path}}]
+   (-> st
+       (store/with-employees (load-employees people-path))
+       (store/with-goals     (load-goals goals-path))
+       (store/with-surveys   (load-surveys surveys-path)))))

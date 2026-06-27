@@ -13,7 +13,7 @@
   Protected attributes live under :protected, so only explicitly-approved
   protected columns can ever appear (and the governor blocks those)."
   [db columns]
-  (let [emps (sort-by :id (vals (:employees @db)))
+  (let [emps (store/all-employees db)
         cell (fn [e c] (str (or (get e c) (get-in e [:protected c]) "")))
         head (str/join "," (map name columns))
         rows (map (fn [e] (str/join "," (map #(cell e %) columns))) emps)]

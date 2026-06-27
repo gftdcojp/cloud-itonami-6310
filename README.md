@@ -60,14 +60,15 @@ approves → commit**), then prints the immutable audit ledger.
 
 | File | Actor / role |
 |---|---|
-| `src/talent/hrllm.cljc` | HR-LLM client — the contained intelligence node (mock inference) |
+| `src/talent/hrllm.cljc` | **Advisor** protocol — `mock-advisor` (default) ‖ `llm-advisor` (real `langchain.model` ChatModel) |
 | `src/talent/policy.cljc` | **PolicyGovernor** — RBAC · purpose · fairness · minimal-disclosure · escalation |
-| `src/talent/operation.cljc` | **OperationActor** — the langgraph-clj StateGraph (1 run = 1 HR op) |
-| `src/talent/store.cljc` | **SSoT + audit ledger** — Datomic-shaped EDN facts (in-mem for dev) |
-| `src/talent/facts.clj` | **seed adapter** — hydrate the SSoT from `m365-archive/facts/people.edn` (annex-aware fallback) |
+| `src/talent/phase.cljc` | **Phase 0→3 rollout** — read-only → assisted → supervised-auto (HR analog of robotaxi ODD) |
+| `src/talent/operation.cljc` | **OperationActor** — langgraph-clj StateGraph (1 run = 1 HR op); Store/Advisor/Phase injected |
+| `src/talent/store.cljc` | **Store** protocol — `MemStore` (default) ‖ `DatomicStore` (`langchain.db`, swappable to Datomic Local / kotoba-server) + append-only ledger |
+| `src/talent/facts.clj` | **seed adapter** — hydrate employees/goals/surveys from `m365-archive/facts` (annex-aware fallback) |
 | `src/talent/report.cljc` | **ReportActor** — governed CSV/帳票 + org-chart projection |
 | `src/talent/sim.cljc` | demo driver |
-| `test/talent/policy_contract_test.clj` | the policy invariant, executable |
+| `test/talent/*_test.clj` | policy contract · store parity (Mem≡Datomic) · LLM advisor · phase rollout · facts — **26 tests / 91 assertions** |
 
 ## kaonavi 相当機能の対応
 
@@ -96,9 +97,33 @@ pointer）・欠落のときは `load-employees` が `nil` を返し、**デモs
 フォールバック**する。実体取得は `west update --group-filter +datalad m365-archive
 && west annex-get`（B2 creds は環境変数）。デモ（`sim`）は再現性のため常にデモseed。
 
+## 本番バックエンドへの差し替え（すべて injection）
+
+actor が依存する3点はどれも *swap* で、コア（OperationActor / PolicyGovernor /
+監査台帳）は触らない:
+
+```clojure
+;; SSoT: in-mem → Datomic（langchain.db。さらに :db-api で実 Datomic Local /
+;;       kotoba-server pod に差し替え可）
+(def store (store/datomic-seed-db))            ; or (facts/hydrate! (store/datomic-store))
+
+;; Advisor: mock → 実 LLM（Anthropic / OpenAI互換=Ollama・vLLM・kotoba）
+(require '[langchain.model :as model])
+(def actor (op/build store {:advisor (hrllm/llm-advisor
+                                       (model/anthropic-model {:api-key (System/getenv "ANTHROPIC_API_KEY")
+                                                               :model "claude-sonnet-4-6"}))}))
+
+;; Phase: context に :phase 0..3 を載せるだけ（既定 3）
+(g/run* actor {:request req :context (assoc ctx :phase 1)} {:thread-id id})
+```
+
+LLM 応答が壊れても `parse-proposal` が confidence 0 の noop に落とすため、
+**LLM の不調が自動 commit になることはない**（governor が必ず escalate/hold）。
+
 ## Status
 
-設計実装 + 本番データ seed 接続まで完了（runnable + 11 tests / 31 assertions）。
-残りの本番化 TODO: SSoT を in-mem から Datomic へ（`store` を protocol 化）、
-HR-LLM mock を kotoba-llm 実推論へ（`hrllm/infer` を protocol 化）、goals/surveys
-も facts 接続、Phase 0→3 の段階導入（ADR §帰結）。
+設計実装 + 本番化 3点（**Datomic 化 / 実 LLM 化 / goals・surveys facts 接続 +
+Phase 0→3**）まで完了。runnable + **26 tests / 91 assertions / 0 failures**。
+`MemStore ≡ DatomicStore` を同一契約テストで保証。残り: 実 Datomic Local /
+kotoba-server pod・実 LLM エンドポイントでの結合確認（要 creds/infra）、
+m365 facts 実体取得（`west annex-get`）後の本番 seed。
