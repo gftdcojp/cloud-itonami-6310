@@ -1,7 +1,13 @@
 name: ci
 
-# This project is a west-managed project in the com-junkawasaki/root
-# superproject; its deps reference sibling repos via :local/root
+# NOTE: the gftdcojp org currently DISABLES GitHub Actions org-wide, so this
+# workflow does not execute here yet. It is kept correct and ready: it runs
+# verbatim once the org enables Actions, or if this project is mirrored under
+# an Actions-enabled org. Until then the gates run locally / in the west
+# superproject: `clojure -M:lint` and `clojure -M:dev:test`.
+#
+# This project is a west project in the com-junkawasaki/root superproject; its
+# deps reference sibling repos via :local/root
 # (../../com-junkawasaki/langgraph-clj, .../langchain-clj). Those two are
 # PUBLIC, so the test job reconstructs the workspace layout by checking them
 # out into the expected relative paths — no token needed.
@@ -10,6 +16,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   lint:

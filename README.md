@@ -47,8 +47,14 @@ back to **hold** and *cannot* be overridden by a human; only soft cases
 
 ```bash
 clojure -M:dev:run     # drive the 4 kaonavi-equivalent domains through one OperationActor
-clojure -M:dev:test    # the policy contract as executable tests
+clojure -M:dev:test    # policy contract · store parity · LLM advisor · phases · facts
+clojure -M:lint        # clj-kondo (errors fail; CI mirrors this)
 ```
+
+> CI: `.github/workflows/ci.yml` runs lint + the full suite (it reconstructs the
+> west layout by checking out the public `langgraph-clj`/`langchain-clj`). The
+> gftdcojp org currently disables Actions org-wide, so it executes via the
+> superproject / locally until that changes — see ADR-0002 §4.
 
 Demo output walks four operations: directory upsert (committed) → an
 evaluation that cites gender as a basis (**fairness reject → hold**) → a
