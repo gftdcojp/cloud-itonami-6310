@@ -44,6 +44,17 @@
     ;; append-only audit ledger.
     :ledger []}))
 
+(defn with-employees
+  "Return `db` with its employee directory replaced by `employees` (e.g. the
+  map hydrated from m365-archive facts by `talent.facts/load-employees`).
+  Goals/surveys/ledger are untouched — production wires those from their own
+  facts files the same way. No-op when `employees` is nil/empty, so callers
+  can pass the facts result directly and fall back to the demo seed."
+  [db employees]
+  (when (seq employees)
+    (swap! db assoc :employees employees))
+  db)
+
 ;; ───────────────────────── read surface ─────────────────────────
 
 (defn employee [db id] (get-in @db [:employees id]))

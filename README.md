@@ -64,6 +64,7 @@ approves → commit**), then prints the immutable audit ledger.
 | `src/talent/policy.cljc` | **PolicyGovernor** — RBAC · purpose · fairness · minimal-disclosure · escalation |
 | `src/talent/operation.cljc` | **OperationActor** — the langgraph-clj StateGraph (1 run = 1 HR op) |
 | `src/talent/store.cljc` | **SSoT + audit ledger** — Datomic-shaped EDN facts (in-mem for dev) |
+| `src/talent/facts.clj` | **seed adapter** — hydrate the SSoT from `m365-archive/facts/people.edn` (annex-aware fallback) |
 | `src/talent/report.cljc` | **ReportActor** — governed CSV/帳票 + org-chart projection |
 | `src/talent/sim.cljc` | demo driver |
 | `test/talent/policy_contract_test.clj` | the policy invariant, executable |
@@ -80,8 +81,24 @@ approves → commit**), then prints the immutable audit ledger.
 | アクセス権限 | PolicyGovernor RBAC 表 |
 | — (SaaS には無い) | **不変の監査台帳** ＋ **データ主権**（SSoT は自分の Datomic） |
 
+## 本番データへの接続（seed）
+
+実データ（gftdcojp の社員）でSSoTを満たすには `talent.facts` を使う:
+
+```clojure
+(require '[talent.store :as store] '[talent.facts :as facts])
+(-> (store/seed-db)
+    (store/with-employees (facts/load-employees)))  ; m365-archive/facts/people.edn
+```
+
+`m365-archive` は DataLad/git-annex（既定 off）なので、実体が未取得（annex
+pointer）・欠落のときは `load-employees` が `nil` を返し、**デモseedに自動
+フォールバック**する。実体取得は `west update --group-filter +datalad m365-archive
+&& west annex-get`（B2 creds は環境変数）。デモ（`sim`）は再現性のため常にデモseed。
+
 ## Status
 
-設計実装の初版（runnable + executable policy contract）。本番化の TODO:
-SSoT を in-mem から Datomic へ、HR-LLM mock を kotoba-llm 実推論へ、seed を
-`m365-archive/facts/people` へ接続、Phase 0→3 の段階導入（ADR §帰結）。
+設計実装 + 本番データ seed 接続まで完了（runnable + 11 tests / 31 assertions）。
+残りの本番化 TODO: SSoT を in-mem から Datomic へ（`store` を protocol 化）、
+HR-LLM mock を kotoba-llm 実推論へ（`hrllm/infer` を protocol 化）、goals/surveys
+も facts 接続、Phase 0→3 の段階導入（ADR §帰結）。
