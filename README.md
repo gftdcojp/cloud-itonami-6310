@@ -30,6 +30,15 @@ See [`docs/DESIGN.md`](docs/DESIGN.md) for the full architecture and
 decision record. See [`docs/business-model.md`](docs/business-model.md) and
 [`docs/operator-guide.md`](docs/operator-guide.md) to start this as an open
 business on itonami.cloud.
+## Robotics premise
+
+All cloud-itonami verticals are designed on the premise that a **robot performs
+the physical domain work**. As the reference implementation, 6310 models the
+actor pattern (HR-LLM sealed in one node) that governs such a robot's actions:
+the actor proposes, an independent PolicyGovernor gates, and the audit ledger
+records every commit, hold and approval. The same pattern gates hardware
+dispatch in robotics verticals via `kotoba-lang/robotics`.
+
 
 ## Open business
 
