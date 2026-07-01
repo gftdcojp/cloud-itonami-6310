@@ -167,3 +167,5 @@ Code is licensed under AGPL-3.0-or-later. Documentation and business-blueprint
 text are intended for open reuse with attribution and share-alike expectations;
 platform certification and the `itonami.cloud` trust mark are governed
 separately.
+
+A live sample of the operator console is rendered in [docs/samples/operator-console.html](docs/samples/operator-console.html) — pure-data HTML output of the kotoba-lang capability UI.

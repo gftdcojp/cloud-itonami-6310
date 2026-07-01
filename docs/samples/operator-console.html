@@ -1,0 +1,16 @@
+<html><head><meta charset="utf-8"><title>cloud-itonami · robotics</title><style>table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.ok { color: #137a3f; }
+body { font-family: system-ui,-apple-system,sans-serif; margin: 0; color: #1a1a1a; background: #fafafa; }
+header.bar { display: flex; align-items: center; gap: 12px; padding: 12px 20px; background: #fff; border-bottom: 1px solid #e5e5e5; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #f0f0f0; }
+h2 { margin-top: 0; font-size: 15px; }
+td.amt { font-variant-numeric: tabular-nums; text-align: right; }
+.warn { color: #b25c00; background: #fff8e1; padding: 2px 6px; border-radius: 4px; }
+main { max-width: 980px; margin: 24px auto; padding: 0 20px; }
+header.bar h1 { font-size: 18px; margin: 0; font-weight: 600; }
+.muted { color: #888; }
+.critical { color: #fff; background: #b3261e; padding: 2px 6px; border-radius: 4px; font-weight: 600; }
+.card { background: #fff; border: 1px solid #e5e5e5; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+.err { color: #b3261e; background: #fbe9e7; padding: 2px 6px; border-radius: 4px; }
+th { font-weight: 600; color: #555; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+header.bar .badge { margin-left: auto; font-size: 12px; color: #666; }</style></head><body><header class="bar"><h1>Robotics Safety — Operator Console</h1><span class="badge">read-only · governor-gated · never dispatches</span></header><main><section class="card"><h2>Missions</h2><table><thead><tr><th>Mission</th><th>Robot</th><th>Objective</th><th>Status</th></tr></thead><tbody><tr><td>M1</td><td>robot-1</td><td>deliver parcel</td><td>planned</td></tr></tbody></table></section><section class="card"><h2>Action gate</h2><p class="muted">allowed safety classes: low, medium, none, safety-critical</p><table><thead><tr><th>Action</th><th>Kind</th><th>Safety</th><th>Gate</th></tr></thead><tbody><tr><td>A1</td><td>move</td><td class="ok">low</td><td><span class="ok">permit</span></td></tr><tr><td>A2</td><td>grasp</td><td class="critical">safety-critical</td><td><span class="warn">sign-off · safety-critical</span></td></tr></tbody></table></section></main></body></html>

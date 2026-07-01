@@ -11,7 +11,7 @@
                        `langchain.db`'s `:db-api` (see langchain.kotoba-db).
 
   Both implement the same protocol and pass the same contract
-  (test/talent/store_contract_test.clj), which is the whole point: the actor,
+  (test/talent/store_contract_test.cljc), which is the whole point: the actor,
   the PolicyGovernor and the audit ledger never know which SSoT they run on.
 
   The ledger stays append-only on every backend — 'who changed/disclosed
